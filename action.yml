@@ -1,0 +1,9 @@
+name: 'Code Quality Check'
+description: 'Analyzes code quality metrics and posts results'
+inputs:
+  token:
+    description: 'Token for API authentication'
+    required: true
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
